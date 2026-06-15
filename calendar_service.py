@@ -1,0 +1,156 @@
+import logging
+import os
+from pathlib import Path
+
+import msal
+import requests
+
+from models import DadosAula
+
+logger = logging.getLogger(__name__)
+
+_GRAPH_SCOPES = ["https://graph.microsoft.com/Calendars.ReadWrite"]
+_IMAP_SCOPES = ["https://outlook.office.com/IMAP.AccessAsUser.All"]
+_CACHE_FILE = Path(__file__).parent / "o365_token.txt"
+_AUTHORITY = "https://login.microsoftonline.com/consumers"
+_GRAPH_URL = "https://graph.microsoft.com/v1.0"
+_TIMEZONE = "America/Sao_Paulo"
+
+
+class CalendarService:
+    def __init__(self, client_id: str) -> None:
+        self._cache = msal.SerializableTokenCache()
+        cache_env = os.getenv("MSAL_TOKEN_CACHE")
+        if cache_env:
+            self._cache.deserialize(cache_env)
+        elif _CACHE_FILE.exists():
+            self._cache.deserialize(_CACHE_FILE.read_text(encoding="utf-8"))
+
+        self._app = msal.PublicClientApplication(
+            client_id,
+            authority=_AUTHORITY,
+            token_cache=self._cache,
+        )
+
+    def _save_cache(self) -> None:
+        if self._cache.has_state_changed:
+            _CACHE_FILE.write_text(self._cache.serialize(), encoding="utf-8")
+
+    def _get_token(self) -> str | None:
+        accounts = self._app.get_accounts()
+        if accounts:
+            result = self._app.acquire_token_silent(_GRAPH_SCOPES, account=accounts[0])
+            if result and "access_token" in result:
+                self._save_cache()
+                return result["access_token"]
+        return None
+
+    def get_imap_token(self) -> str | None:
+        """Retorna token OAuth2 para autenticação IMAP XOAUTH2.
+
+        Tenta silenciosamente primeiro; se o usuário ainda não deu consentimento
+        para o escopo IMAP, inicia um novo Device Code Flow para obtê-lo.
+        """
+        accounts = self._app.get_accounts()
+        if accounts:
+            result = self._app.acquire_token_silent(_IMAP_SCOPES, account=accounts[0])
+            if result and "access_token" in result:
+                self._save_cache()
+                return result["access_token"]
+
+        logger.info("Consentimento para acesso ao IMAP necessário. Siga as instruções abaixo.")
+        flow = self._app.initiate_device_flow(scopes=_IMAP_SCOPES)
+        if "user_code" not in flow:
+            logger.error("Falha ao iniciar Device Code Flow para IMAP: %s", flow.get("error_description"))
+            return None
+
+        print(flow["message"])
+        result = self._app.acquire_token_by_device_flow(flow)
+        if result and "access_token" in result:
+            self._save_cache()
+            logger.info("Acesso ao IMAP autorizado.")
+            return result["access_token"]
+
+        logger.error("Falha na autenticação IMAP: %s", result.get("error_description"))
+        return None
+
+    def authenticate(self) -> bool:
+        """Autentica via Device Code Flow; reutiliza token salvo se válido."""
+        if self._get_token():
+            logger.info("Token existente válido. Nenhuma nova autenticação necessária.")
+            return True
+
+        flow = self._app.initiate_device_flow(scopes=_GRAPH_SCOPES)
+        if "user_code" not in flow:
+            logger.error("Falha ao iniciar Device Code Flow: %s", flow.get("error_description"))
+            return False
+
+        logger.info("Iniciando autenticação via Device Code Flow. Siga as instruções abaixo.")
+        print(flow["message"])
+
+        result = self._app.acquire_token_by_device_flow(flow)
+        if "access_token" in result:
+            self._save_cache()
+            logger.info("Autenticação concluída. Token salvo em '%s'.", _CACHE_FILE.name)
+            return True
+
+        logger.error("Falha na autenticação: %s", result.get("error_description"))
+        return False
+
+    def create_event(self, dados: DadosAula) -> bool:
+        """Cria um evento no calendário padrão do Outlook. Retorna True em caso de sucesso."""
+        try:
+            if not self.authenticate():
+                return False
+
+            token = self._get_token()
+            if not token:
+                logger.error("Não foi possível obter token de acesso.")
+                return False
+
+            corpo = dados.descricao
+            if dados.link_zoom:
+                corpo += f"\n\nLink da aula: {dados.link_zoom}"
+
+            payload = {
+                "subject": dados.titulo,
+                "start": {
+                    "dateTime": dados.horario_inicio.isoformat(),
+                    "timeZone": _TIMEZONE,
+                },
+                "end": {
+                    "dateTime": dados.horario_fim.isoformat(),
+                    "timeZone": _TIMEZONE,
+                },
+                "location": {"displayName": dados.escola},
+                "body": {"contentType": "text", "content": corpo},
+                "isReminderOn": True,
+                "reminderMinutesBeforeStart": 15,
+            }
+
+            response = requests.post(
+                f"{_GRAPH_URL}/me/events",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=30,
+            )
+
+            if response.status_code == 201:
+                logger.info(
+                    "Evento criado com sucesso: '%s' em %s.",
+                    dados.titulo,
+                    dados.horario_inicio.strftime("%d/%m/%Y %H:%M"),
+                )
+                return True
+
+            logger.error(
+                "Erro ao criar evento: HTTP %d — %s", response.status_code, response.text
+            )
+            return False
+
+        except Exception as exc:
+            logger.error("Erro ao criar evento '%s': %s", dados.titulo, exc)
+            return False
