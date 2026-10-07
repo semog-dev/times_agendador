@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 
 from calendar_service import CalendarService
 from email_parser import parse_email
-from imap_reader import fetch_unread_emails
+from imap_reader import fetch_pending_emails
 from models import DadosAula
 from state_store import StateStore
 
@@ -38,6 +38,7 @@ def _executar_ciclo(
     email_address: str,
     subject_filter: str,
     sender_domain: str,
+    janela_dias: int,
     duracao_minutos: int,
     calendar_service: CalendarService,
     state_store: StateStore,
@@ -49,13 +50,15 @@ def _executar_ciclo(
 
     logger.info("Buscando emails não processados na caixa de entrada...")
     try:
-        emails = fetch_unread_emails(
+        emails = fetch_pending_emails(
             imap_host=imap_host,
             imap_port=imap_port,
             email_address=email_address,
             access_token=imap_token,
             subject_filter=subject_filter,
             sender_domain=sender_domain,
+            janela_dias=janela_dias,
+            ja_processado=state_store.is_processed,
         )
     except RuntimeError as exc:
         logger.error("Erro ao acessar o IMAP: %s", exc)
@@ -71,10 +74,6 @@ def _executar_ciclo(
     for email_id, html_body in emails:
         logger.info("--- Processando email ID: %s ---", email_id)
 
-        if state_store.is_processed(email_id):
-            logger.info("Email ID %s já foi processado anteriormente. Ignorando.", email_id)
-            continue
-
         try:
             dados_aula: DadosAula = parse_email(html_body, email_id, duracao_minutos)
             logger.info(
@@ -84,6 +83,8 @@ def _executar_ciclo(
             )
         except ValueError as exc:
             logger.error("Erro ao parsear email ID %s: %s", email_id, exc)
+            # Erro de formato é determinístico: registra para não repetir a cada ciclo
+            state_store.mark_processed(email_id)
             erros += 1
             continue
 
@@ -111,6 +112,7 @@ def main() -> None:
     sender_domain = os.getenv("SENDER_DOMAIN", "timesidiomas")
     client_id = _env_obrigatorio("AZURE_CLIENT_ID")
     duracao_minutos = int(os.getenv("DURACAO_AULA_MINUTOS", "50"))
+    janela_dias = int(os.getenv("SEARCH_WINDOW_DAYS", "7"))
 
     state_store = StateStore()
     calendar_service = CalendarService(client_id)
@@ -127,6 +129,7 @@ def main() -> None:
                 email_address=email_address,
                 subject_filter=subject_filter,
                 sender_domain=sender_domain,
+                janela_dias=janela_dias,
                 duracao_minutos=duracao_minutos,
                 calendar_service=calendar_service,
                 state_store=state_store,

@@ -127,6 +127,7 @@ AZURE_CLIENT_ID=cole-aqui-o-id-do-aplicativo
 AZURE_CLIENT_SECRET=cole-aqui-o-valor-do-segredo
 
 DURACAO_AULA_MINUTOS=50
+SEARCH_WINDOW_DAYS=7
 ```
 
 > **Importante:** Nunca commite o arquivo `.env` em repositórios públicos.
@@ -254,13 +255,16 @@ Pressione `Win + R`, digite `taskschd.msc` e pressione Enter.
 
 ## Comportamento e idempotência
 
-- O script **não cria eventos duplicados**: cada email processado tem seu ID
-  salvo em `processed_ids.json`. Se executar duas vezes seguidas para o mesmo
-  email, o segundo ciclo o ignora.
-- Emails não processados por erro (falha de rede, parsing inválido) **não são
-  marcados como processados** e serão tentados novamente na próxima execução.
-- Emails são marcados como **lidos no Outlook** assim que são recuperados via
-  IMAP, independentemente do sucesso do agendamento no calendário.
+- A busca considera emails dos últimos `SEARCH_WINDOW_DAYS` dias (padrão: 7)
+  com o assunto configurado, **lidos ou não**. O script não altera a flag de
+  lido no Outlook.
+- O script **não cria eventos duplicados**: cada email processado tem seu
+  `Message-ID` salvo em `processed_ids.json`. Além disso, antes de criar o
+  evento, o calendário é consultado; se já existir um evento com o mesmo título
+  no mesmo horário, nada é criado.
+- Emails cujo agendamento falhou (falha de rede, erro do Graph) **não são
+  marcados como processados** e serão tentados novamente no próximo ciclo.
+  Emails com formato inválido são registrados no log e não são repetidos.
 
 ---
 

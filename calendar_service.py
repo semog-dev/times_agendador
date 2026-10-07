@@ -97,6 +97,29 @@ class CalendarService:
         logger.error("Falha na autenticação: %s", result.get("error_description"))
         return False
 
+    def _event_exists(self, token: str, dados: DadosAula) -> bool:
+        """Verifica se já há evento com o mesmo título no horário da aula.
+
+        Protege contra duplicatas quando o processed_ids.json é perdido (ex.: redeploy).
+        Lança exceção se a consulta falhar, para que o evento não seja criado às cegas.
+        """
+        response = requests.get(
+            f"{_GRAPH_URL}/me/calendarView",
+            headers={"Authorization": f"Bearer {token}"},
+            params={
+                "startDateTime": dados.horario_inicio.isoformat(),
+                "endDateTime": dados.horario_fim.isoformat(),
+                "$select": "subject",
+                "$top": "50",
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+        return any(
+            evento.get("subject") == dados.titulo
+            for evento in response.json().get("value", [])
+        )
+
     def create_event(self, dados: DadosAula) -> bool:
         """Cria um evento no calendário padrão do Outlook. Retorna True em caso de sucesso."""
         try:
@@ -107,6 +130,14 @@ class CalendarService:
             if not token:
                 logger.error("Não foi possível obter token de acesso.")
                 return False
+
+            if self._event_exists(token, dados):
+                logger.info(
+                    "Evento '%s' em %s já existe no calendário. Nada a criar.",
+                    dados.titulo,
+                    dados.horario_inicio.strftime("%d/%m/%Y %H:%M"),
+                )
+                return True
 
             corpo = dados.descricao
             if dados.link_zoom:
