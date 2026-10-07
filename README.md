@@ -2,7 +2,7 @@
 
 Script Python que monitora a caixa de entrada do Outlook via IMAP, detecta
 emails de confirmação de aulas da **Times Idiomas** e cria automaticamente
-eventos no **Microsoft Outlook Calendar** via Microsoft Graph API.
+eventos no **Microsoft Outlook Calendar** via Microsoft Graph API
 
 ---
 
