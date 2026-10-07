@@ -128,6 +128,9 @@ AZURE_CLIENT_SECRET=cole-aqui-o-valor-do-segredo
 
 DURACAO_AULA_MINUTOS=50
 SEARCH_WINDOW_DAYS=7
+
+# Opcional: pasta onde ficam o365_token.txt e processed_ids.json (padrão: pasta do script)
+# DATA_DIR=/data
 ```
 
 > **Importante:** Nunca commite o arquivo `.env` em repositórios públicos.
@@ -158,7 +161,8 @@ and enter the code XXXXXXXXX to authenticate.
 4. Autorize as permissões solicitadas (`Calendars.ReadWrite`)
 5. Volte ao terminal — o script continuará automaticamente
 
-O token é salvo em `o365_token.txt` na pasta do script. Nas próximas
+O token é salvo em `o365_token.txt` na pasta do script (ou em `DATA_DIR`, se
+definida). Nas próximas
 execuções, o script reutiliza esse token e **não solicita autenticação
 novamente** (enquanto o token não expirar, o que pode ser meses).
 
@@ -250,6 +254,29 @@ Pressione `Win + R`, digite `taskschd.msc` e pressione Enter.
 2. Para testar imediatamente, clique com o botão direito na tarefa e selecione
    **"Executar"**
 3. Verifique o log em **"Histórico"** ou no terminal se executar manualmente
+
+---
+
+## Deploy no Railway
+
+O filesystem do container é efêmero: sem um volume, o token e o
+`processed_ids.json` se perdem a cada redeploy e o bot pede autenticação de novo.
+
+1. No serviço, em **Settings → Volumes**, crie um volume com mount path `/data`.
+2. Em **Variables**, adicione `DATA_DIR=/data` (além das variáveis do `.env`).
+3. Após o deploy, abra o log do serviço. Ele exibirá:
+   ```
+   To sign in, use a web browser to open the page https://microsoft.com/devicelogin
+   and enter the code XXXXXXXXX to authenticate.
+   ```
+   Autentique com a conta `@hotmail.com` (o código expira em ~15 minutos; se
+   expirar, o serviço reinicia e gera outro).
+4. No primeiro ciclo aparecerá um **segundo código**, precedido de
+   `Consentimento para acesso ao IMAP necessário` — repita o passo 3. Calendário
+   (Graph) e IMAP exigem consentimentos separados.
+
+Nos deploys seguintes o log deve mostrar
+`Token existente válido. Nenhuma nova autenticação necessária.`
 
 ---
 

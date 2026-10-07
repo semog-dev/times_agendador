@@ -1,17 +1,17 @@
 import logging
 import os
-from pathlib import Path
 
 import msal
 import requests
 
 from models import DadosAula
+from state_store import get_data_dir
 
 logger = logging.getLogger(__name__)
 
 _GRAPH_SCOPES = ["https://graph.microsoft.com/Calendars.ReadWrite"]
 _IMAP_SCOPES = ["https://outlook.office.com/IMAP.AccessAsUser.All"]
-_CACHE_FILE = Path(__file__).parent / "o365_token.txt"
+_CACHE_FILENAME = "o365_token.txt"
 _AUTHORITY = "https://login.microsoftonline.com/consumers"
 _GRAPH_URL = "https://graph.microsoft.com/v1.0"
 _TIMEZONE = "America/Sao_Paulo"
@@ -19,12 +19,14 @@ _TIMEZONE = "America/Sao_Paulo"
 
 class CalendarService:
     def __init__(self, client_id: str) -> None:
+        self._cache_file = get_data_dir() / _CACHE_FILENAME
         self._cache = msal.SerializableTokenCache()
+        # O arquivo é atualizado a cada renovação de token; MSAL_TOKEN_CACHE é só a semente inicial
         cache_env = os.getenv("MSAL_TOKEN_CACHE")
-        if cache_env:
+        if self._cache_file.exists():
+            self._cache.deserialize(self._cache_file.read_text(encoding="utf-8"))
+        elif cache_env:
             self._cache.deserialize(cache_env)
-        elif _CACHE_FILE.exists():
-            self._cache.deserialize(_CACHE_FILE.read_text(encoding="utf-8"))
 
         self._app = msal.PublicClientApplication(
             client_id,
@@ -34,7 +36,7 @@ class CalendarService:
 
     def _save_cache(self) -> None:
         if self._cache.has_state_changed:
-            _CACHE_FILE.write_text(self._cache.serialize(), encoding="utf-8")
+            self._cache_file.write_text(self._cache.serialize(), encoding="utf-8")
 
     def _get_token(self) -> str | None:
         accounts = self._app.get_accounts()
@@ -64,7 +66,8 @@ class CalendarService:
             logger.error("Falha ao iniciar Device Code Flow para IMAP: %s", flow.get("error_description"))
             return None
 
-        print(flow["message"])
+        # Via logger (e não print) para o código aparecer no log do container
+        logger.info(flow["message"])
         result = self._app.acquire_token_by_device_flow(flow)
         if result and "access_token" in result:
             self._save_cache()
@@ -86,12 +89,12 @@ class CalendarService:
             return False
 
         logger.info("Iniciando autenticação via Device Code Flow. Siga as instruções abaixo.")
-        print(flow["message"])
+        logger.info(flow["message"])
 
         result = self._app.acquire_token_by_device_flow(flow)
         if "access_token" in result:
             self._save_cache()
-            logger.info("Autenticação concluída. Token salvo em '%s'.", _CACHE_FILE.name)
+            logger.info("Autenticação concluída. Token salvo em '%s'.", self._cache_file)
             return True
 
         logger.error("Falha na autenticação: %s", result.get("error_description"))
